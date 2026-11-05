@@ -23,6 +23,7 @@ from agente.llm_client import (
     LLMClient,
     LLMError,
     Mensagem,
+    ResultadosFerramentas,
 )
 from agente.tools import DECLARACOES
 
@@ -184,6 +185,28 @@ def test_chamada_sem_argumentos_vira_dicionario_vazio(gemini, cliente):
     ]
 
     assert cliente.gerar(PERGUNTA).chamadas == (ChamadaFerramenta("consultar_cardapio", {}),)
+
+
+def test_devolve_chamada_e_resultado_ao_modelo_com_a_assinatura(gemini, cliente):
+    argumentos = {"mesa_numero": 3}
+    parte = {"functionCall": {"name": "criar_pedido", "args": argumentos}, "thoughtSignature": "YWJj"}
+    gemini.roteiro = [
+        (200, {"candidates": [{"content": {"role": "model", "parts": [parte]}, "finishReason": "STOP"}]}),
+        RESPOSTA_OK,
+    ]
+
+    resposta = cliente.gerar(PERGUNTA)
+    assert resposta.chamadas[0].assinatura == b"abc"
+
+    resultados = ResultadosFerramentas((("criar_pedido", {"ok": True}),))
+    cliente.gerar([*PERGUNTA, resposta, resultados])
+
+    modelo, usuario = gemini.chamadas[1]["corpo"]["contents"][1:]
+    assert modelo["role"] == "model"
+    assert modelo["parts"][0]["functionCall"] == {"name": "criar_pedido", "args": argumentos}
+    assert modelo["parts"][0]["thoughtSignature"] == "YWJj"
+    assert usuario["role"] == "user"
+    assert usuario["parts"][0]["functionResponse"] == {"name": "criar_pedido", "response": {"ok": True}}
 
 
 def test_temperatura_e_baixa():

@@ -75,6 +75,7 @@ class Mensagem:
 class ChamadaFerramenta:
     nome: str
     argumentos: dict
+    assinatura: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,16 @@ class RespostaLLM:
 
     texto: str = ""
     chamadas: tuple[ChamadaFerramenta, ...] = ()
+
+
+@dataclass(frozen=True)
+class ResultadosFerramentas:
+    """Pares (nome da ferramenta, resultado), na ordem em que o modelo pediu."""
+
+    resultados: tuple[tuple[str, dict], ...]
+
+
+ItemHistorico = Mensagem | RespostaLLM | ResultadosFerramentas
 
 
 def _espera_sugerida(erro: errors.APIError) -> float:
@@ -120,13 +131,42 @@ def _declarar_ferramentas(ferramentas: Sequence[dict]) -> list[types.Tool] | Non
     ]
 
 
-def _ler_resposta(resposta: types.GenerateContentResponse) -> RespostaLLM:
-    chamadas = tuple(
-        ChamadaFerramenta(nome=chamada.name, argumentos=dict(chamada.args or {}))
-        for chamada in resposta.function_calls or []
+def _para_conteudo(item: ItemHistorico) -> types.Content:
+    if isinstance(item, Mensagem):
+        return types.Content(role=_PAPEIS[item.papel], parts=[types.Part(text=item.texto)])
+    if isinstance(item, RespostaLLM):
+        return types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(name=c.nome, args=c.argumentos),
+                    thought_signature=c.assinatura,
+                )
+                for c in item.chamadas
+            ],
+        )
+    return types.Content(
+        role="user",
+        parts=[
+            types.Part.from_function_response(name=nome, response=resultado)
+            for nome, resultado in item.resultados
+        ],
     )
-    if chamadas:
-        return RespostaLLM(chamadas=chamadas)
+
+
+def _ler_resposta(resposta: types.GenerateContentResponse) -> RespostaLLM:
+    if resposta.function_calls:
+        return RespostaLLM(
+            chamadas=tuple(
+                ChamadaFerramenta(
+                    nome=parte.function_call.name,
+                    argumentos=dict(parte.function_call.args or {}),
+                    assinatura=parte.thought_signature,
+                )
+                for parte in resposta.candidates[0].content.parts
+                if parte.function_call
+            )
+        )
 
     # Uma resposta bloqueada ou vazia chega sem erro e com text=None.
     texto = (resposta.text or "").strip()
@@ -155,12 +195,9 @@ class LLMClient:
             tools=_declarar_ferramentas(ferramentas),
         )
 
-    def gerar(self, historico: Sequence[Mensagem]) -> RespostaLLM:
+    def gerar(self, historico: Sequence[ItemHistorico]) -> RespostaLLM:
         """Devolve a próxima resposta do modelo para o histórico da conversa."""
-        conteudos = [
-            types.Content(role=_PAPEIS[m.papel], parts=[types.Part(text=m.texto)])
-            for m in historico
-        ]
+        conteudos = [_para_conteudo(item) for item in historico]
 
         for tentativa in range(1, MAX_TENTATIVAS + 1):
             try:

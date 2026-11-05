@@ -1,0 +1,17 @@
+# Segredos: nunca versionar
+.env
+.env.*
+!.env.example
+
+# Ambiente virtual
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Testes
+.pytest_cache/

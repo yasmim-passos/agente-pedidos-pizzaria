@@ -1,0 +1,7 @@
+# Complemento local ao docker-compose.yml do backend, sem alterar o arquivo do time.
+# O compose original só publica a API pelo nginx, e o nginx depende de um serviço
+# (node-app) que não está no compose. Aqui a API é exposta diretamente na porta 8080.
+services:
+  app:
+    ports:
+      - "8080:8080"

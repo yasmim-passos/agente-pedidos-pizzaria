@@ -134,13 +134,13 @@ def test_cria_o_pedido_no_formato_exato_da_api(api_falsa, ferramentas):
     resultado = ferramentas.criar_pedido(3, [ITEM_VALIDO])
 
     assert api_falsa.chamadas_de("POST")[0]["corpo"] == {
-        "tableId": 3,
+        "tableId": 11,
         "items": [{"productId": 2, "quantity": 1, "notes": "sem cebola"}],
     }
     assert resultado == {
         "ok": True,
         "pedido_id": 42,
-        "mesa_id": 3,
+        "mesa_numero": 3,
         "total": 55.0,
         "itens": [
             {
@@ -170,8 +170,14 @@ def test_aceita_numeros_inteiros_enviados_como_decimal(api_falsa, ferramentas):
 
     assert resultado["ok"] is True
     corpo = api_falsa.chamadas_de("POST")[0]["corpo"]
-    assert corpo["tableId"] == 3
+    assert corpo["tableId"] == 11
     assert corpo["items"][0]["productId"] == 2
+
+
+def test_cada_numero_de_mesa_vai_para_o_id_certo(api_falsa, ferramentas):
+    ferramentas.criar_pedido(4, [ITEM_VALIDO])
+
+    assert api_falsa.chamadas_de("POST")[0]["corpo"]["tableId"] == 12
 
 
 def test_campos_a_mais_do_modelo_nao_chegam_a_api(api_falsa, ferramentas):
@@ -221,6 +227,18 @@ def test_recusa_mesa_nao_informada_ou_invalida(api_falsa, ferramentas, mesa):
     assert "mesa" in resultado["erro"]
 
 
+def test_recusa_mesa_que_nao_existe(api_falsa, ferramentas):
+    resultado = ferramentas.criar_pedido(99, [ITEM_VALIDO])
+
+    assert_falhou_sem_criar(resultado, api_falsa)
+    assert "mesa 99" in resultado["erro"]
+
+
+def test_id_de_mesa_nao_e_aceito_como_numero(api_falsa, ferramentas):
+    # 11 é o id da mesa 3, mas não existe mesa com o número 11.
+    assert_falhou_sem_criar(ferramentas.criar_pedido(11, [ITEM_VALIDO]), api_falsa)
+
+
 @pytest.mark.parametrize("itens", [None, [], "uma pizza", [{"quantidade": 1}]])
 def test_recusa_itens_invalidos(api_falsa, ferramentas, itens):
     resultado = ferramentas.criar_pedido(3, itens)
@@ -235,7 +253,7 @@ def test_recusa_itens_invalidos(api_falsa, ferramentas, itens):
 def test_404_pede_para_confirmar_a_mesa(api_falsa, ferramentas):
     api_falsa.rotas[PEDIDOS] = (404, {"status": 404, "error": "Not Found", "path": "/orders"})
 
-    resultado = ferramentas.criar_pedido(99, [ITEM_VALIDO])
+    resultado = ferramentas.criar_pedido(3, [ITEM_VALIDO])
 
     assert resultado["ok"] is False
     assert "mesa" in resultado["erro"]
@@ -253,8 +271,18 @@ def test_outros_status_viram_mensagem_amigavel(api_falsa, ferramentas, status):
     assert_mensagem_amigavel(resultado["erro"])
 
 
-def test_api_fora_do_ar_na_validacao_nao_tenta_criar(api_falsa, ferramentas):
-    api_falsa.rotas[MENU] = (500, {})
+@pytest.mark.parametrize("rota", [MENU, MESAS_ROTA])
+def test_api_fora_do_ar_na_validacao_nao_tenta_criar(api_falsa, ferramentas, rota):
+    api_falsa.rotas[rota] = (500, {})
+
+    resultado = ferramentas.criar_pedido(3, [ITEM_VALIDO])
+
+    assert_falhou_sem_criar(resultado, api_falsa)
+    assert resultado["erro"] == ERRO_INDISPONIVEL
+
+
+def test_mesas_em_formato_inesperado_nao_tenta_criar(api_falsa, ferramentas):
+    api_falsa.rotas[MESAS_ROTA] = (200, [{"id": 11}])
 
     resultado = ferramentas.criar_pedido(3, [ITEM_VALIDO])
 
@@ -292,7 +320,7 @@ def test_executar_consulta_o_cardapio(ferramentas):
 
 
 def test_executar_cria_o_pedido(ferramentas):
-    resultado = ferramentas.executar("criar_pedido", {"mesa_id": 3, "itens": [ITEM_VALIDO]})
+    resultado = ferramentas.executar("criar_pedido", {"mesa_numero": 3, "itens": [ITEM_VALIDO]})
 
     assert resultado["pedido_id"] == 42
 
@@ -318,11 +346,11 @@ def test_declaracao_de_criar_pedido_usa_os_mesmos_nomes_da_validacao(api_falsa, 
     criar = next(d for d in DECLARACOES if d["nome"] == "criar_pedido")["parametros"]
     item = criar["properties"]["itens"]["items"]
 
-    assert set(criar["required"]) == {"mesa_id", "itens"}
+    assert set(criar["required"]) == {"mesa_numero", "itens"}
     assert set(item["properties"]) == {"produto_id", "quantidade", "observacoes"}
 
     resultado = ferramentas.executar(
         "criar_pedido",
-        {"mesa_id": 3, "itens": [{nome: valor for nome, valor in ITEM_VALIDO.items() if nome in item["properties"]}]},
+        {"mesa_numero": 3, "itens": [{nome: valor for nome, valor in ITEM_VALIDO.items() if nome in item["properties"]}]},
     )
     assert resultado["ok"] is True

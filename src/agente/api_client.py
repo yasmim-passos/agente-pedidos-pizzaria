@@ -34,6 +34,9 @@ class ApiClient:
     def listar_cardapio(self) -> Any:
         return self._requisitar("GET", "/menu/list")
 
+    def listar_mesas(self) -> Any:
+        return self._requisitar("GET", "/tables")
+
     def criar_pedido(self, corpo: dict) -> Any:
         return self._requisitar("POST", "/orders", json=corpo)
 

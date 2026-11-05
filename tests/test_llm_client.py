@@ -18,14 +18,17 @@ from agente.llm_client import (
     MAX_TENTATIVAS,
     PROMPT_SISTEMA,
     TEMPERATURA,
+    ChamadaFerramenta,
     LimiteExcedidoError,
     LLMClient,
     LLMError,
     Mensagem,
 )
+from agente.tools import DECLARACOES
 
 CHAVE_FALSA = "chave-falsa-de-teste"
 MODELO = "modelo-de-teste"
+CONFIG = Config(CHAVE_FALSA, MODELO, "http://nao-usada", "nao-usado")
 PERGUNTA = [Mensagem("usuario", "Oi")]
 
 RESPOSTA_OK = (
@@ -117,7 +120,7 @@ def cliente(gemini, esperas):
 def test_devolve_o_texto_do_modelo(gemini, cliente):
     gemini.roteiro = [RESPOSTA_OK]
 
-    assert cliente.gerar(PERGUNTA) == "Olá!"
+    assert cliente.gerar(PERGUNTA).texto == "Olá!"
 
 
 def test_envia_modelo_prompt_temperatura_e_historico(gemini, cliente):
@@ -140,6 +143,49 @@ def test_envia_modelo_prompt_temperatura_e_historico(gemini, cliente):
     assert corpo["contents"][2]["parts"][0]["text"] == "Uma pizza"
 
 
+def test_sem_ferramentas_nao_envia_tools(gemini, cliente):
+    gemini.roteiro = [RESPOSTA_OK]
+
+    cliente.gerar(PERGUNTA)
+
+    assert "tools" not in gemini.chamadas[0]["corpo"]
+
+
+def test_declara_as_ferramentas_para_o_gemini(gemini, esperas):
+    gemini.roteiro = [RESPOSTA_OK]
+    cliente = LLMClient(CONFIG, ferramentas=DECLARACOES, dormir=esperas.append)
+
+    cliente.gerar(PERGUNTA)
+
+    declaradas = gemini.chamadas[0]["corpo"]["tools"][0]["functionDeclarations"]
+    assert [d["name"] for d in declaradas] == ["consultar_cardapio", "criar_pedido"]
+    criar = declaradas[1]
+    assert criar["description"]
+    assert set(criar["parameters_json_schema"]["required"]) == {"mesa_numero", "itens"}
+
+
+def test_devolve_a_chamada_de_ferramenta_pedida_pelo_modelo(gemini, cliente):
+    argumentos = {"mesa_numero": 3, "itens": [{"produto_id": 2, "quantidade": 1}]}
+    parte = {"functionCall": {"name": "criar_pedido", "args": argumentos}}
+    gemini.roteiro = [
+        (200, {"candidates": [{"content": {"role": "model", "parts": [parte]}, "finishReason": "STOP"}]})
+    ]
+
+    resposta = cliente.gerar(PERGUNTA)
+
+    assert resposta.texto == ""
+    assert resposta.chamadas == (ChamadaFerramenta("criar_pedido", argumentos),)
+
+
+def test_chamada_sem_argumentos_vira_dicionario_vazio(gemini, cliente):
+    parte = {"functionCall": {"name": "consultar_cardapio"}}
+    gemini.roteiro = [
+        (200, {"candidates": [{"content": {"role": "model", "parts": [parte]}, "finishReason": "STOP"}]})
+    ]
+
+    assert cliente.gerar(PERGUNTA).chamadas == (ChamadaFerramenta("consultar_cardapio", {}),)
+
+
 def test_temperatura_e_baixa():
     assert 0 <= TEMPERATURA <= 0.3
 
@@ -147,7 +193,7 @@ def test_temperatura_e_baixa():
 def test_429_tenta_de_novo_e_devolve_a_resposta(gemini, cliente, esperas):
     gemini.roteiro = [ERRO_429, ERRO_429, RESPOSTA_OK]
 
-    assert cliente.gerar(PERGUNTA) == "Olá!"
+    assert cliente.gerar(PERGUNTA).texto == "Olá!"
     assert len(gemini.chamadas) == 3
     assert len(esperas) == 2
 
@@ -165,7 +211,7 @@ def test_429_sem_parar_desiste_no_maximo_de_tentativas(gemini, cliente, esperas)
 def test_503_tenta_de_novo_e_devolve_a_resposta(gemini, cliente, esperas):
     gemini.roteiro = [ERRO_503, ERRO_503, RESPOSTA_OK]
 
-    assert cliente.gerar(PERGUNTA) == "Olá!"
+    assert cliente.gerar(PERGUNTA).texto == "Olá!"
     assert len(gemini.chamadas) == 3
     assert len(esperas) == 2
 
@@ -184,7 +230,7 @@ def test_503_sem_parar_desiste_e_nao_e_limite_excedido(gemini, cliente, esperas)
 def test_alterna_429_e_503_ate_conseguir(gemini, cliente, esperas):
     gemini.roteiro = [ERRO_429, ERRO_503, RESPOSTA_OK]
 
-    assert cliente.gerar(PERGUNTA) == "Olá!"
+    assert cliente.gerar(PERGUNTA).texto == "Olá!"
     assert len(esperas) == 2
 
 
@@ -219,7 +265,7 @@ def test_espera_longa_demais_desiste_sem_aguardar(gemini, cliente, esperas):
 def test_espera_sugerida_invalida_usa_o_backoff(gemini, cliente, esperas):
     gemini.roteiro = [erro_429_com_espera("logo"), RESPOSTA_OK]
 
-    assert cliente.gerar(PERGUNTA) == "Olá!"
+    assert cliente.gerar(PERGUNTA).texto == "Olá!"
     assert len(esperas) == 1
 
 

@@ -71,6 +71,20 @@ class Mensagem:
     texto: str
 
 
+@dataclass(frozen=True)
+class ChamadaFerramenta:
+    nome: str
+    argumentos: dict
+
+
+@dataclass(frozen=True)
+class RespostaLLM:
+    """O modelo responde com texto para o cliente ou pede para executar ferramentas."""
+
+    texto: str = ""
+    chamadas: tuple[ChamadaFerramenta, ...] = ()
+
+
 def _espera_sugerida(erro: errors.APIError) -> float:
     """Lê quanto esperar, se o corpo do erro 429 informar (ex.: "37s")."""
     try:
@@ -88,8 +102,46 @@ def _calcular_espera(tentativa: int, erro: errors.APIError) -> float:
     return max(backoff, _espera_sugerida(erro))
 
 
+def _declarar_ferramentas(ferramentas: Sequence[dict]) -> list[types.Tool] | None:
+    """Traduz as declarações neutras do tools.py para o formato do Gemini."""
+    if not ferramentas:
+        return None
+    return [
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name=ferramenta["nome"],
+                    description=ferramenta["descricao"],
+                    parameters_json_schema=ferramenta["parametros"],
+                )
+                for ferramenta in ferramentas
+            ]
+        )
+    ]
+
+
+def _ler_resposta(resposta: types.GenerateContentResponse) -> RespostaLLM:
+    chamadas = tuple(
+        ChamadaFerramenta(nome=chamada.name, argumentos=dict(chamada.args or {}))
+        for chamada in resposta.function_calls or []
+    )
+    if chamadas:
+        return RespostaLLM(chamadas=chamadas)
+
+    # Uma resposta bloqueada ou vazia chega sem erro e com text=None.
+    texto = (resposta.text or "").strip()
+    if not texto:
+        raise LLMError("O Gemini não devolveu texto.")
+    return RespostaLLM(texto=texto)
+
+
 class LLMClient:
-    def __init__(self, config: Config, dormir: Callable[[float], None] = time.sleep):
+    def __init__(
+        self,
+        config: Config,
+        ferramentas: Sequence[dict] = (),
+        dormir: Callable[[float], None] = time.sleep,
+    ):
         self._modelo = config.gemini_model
         self._dormir = dormir
         # O cliente fica guardado no objeto: se for descartado, o SDK fecha a conexão.
@@ -100,9 +152,10 @@ class LLMClient:
         self._geracao = types.GenerateContentConfig(
             system_instruction=PROMPT_SISTEMA,
             temperature=TEMPERATURA,
+            tools=_declarar_ferramentas(ferramentas),
         )
 
-    def gerar(self, historico: Sequence[Mensagem]) -> str:
+    def gerar(self, historico: Sequence[Mensagem]) -> RespostaLLM:
         """Devolve a próxima resposta do modelo para o histórico da conversa."""
         conteudos = [
             types.Content(role=_PAPEIS[m.papel], parts=[types.Part(text=m.texto)])
@@ -137,9 +190,6 @@ class LLMClient:
             except httpx.TransportError as erro:
                 raise LLMError("Não foi possível falar com o Gemini.") from erro
             else:
-                # Uma resposta bloqueada ou vazia chega sem erro e com text=None.
-                if not (resposta.text or "").strip():
-                    raise LLMError("O Gemini não devolveu texto.")
-                return resposta.text
+                return _ler_resposta(resposta)
 
         raise AssertionError("O laço sempre retorna ou levanta um erro.")

@@ -29,6 +29,16 @@ Depois, preencha o `.env`:
 
 O `.env` não vai para o Git.
 
+## Como conversar com o agente
+
+Com a API no ar e o `.env` preenchido:
+
+```powershell
+python -m agente.cli
+```
+
+Digite `sair` para encerrar. Com `-v`, o terminal também mostra cada ferramenta chamada, com os argumentos e o resultado.
+
 ## Contrato da API
 
 O agente usa três rotas. Todas recebem `Authorization: Bearer <API_TOKEN>`.
